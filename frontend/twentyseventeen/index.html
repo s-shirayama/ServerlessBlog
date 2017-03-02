@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en-US" class="js svg background-fixed"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{articleTitle} – {blogTitle}</title>
+<link href="https://fonts.gstatic.com/" crossorigin="" rel="preconnect">
+<link rel="stylesheet" id="twentyseventeen-fonts-css" href="assets/font.css" type="text/css" media="all">
+<link rel="stylesheet" id="twentyseventeen-style-css" href="assets/style.css" type="text/css" media="all">
+<script src="assets/jquery.min.js"></script>
+<!-- <link rel="canonical" href="https://www.s-shirayama.com/tmp/wordpress/index.php/2017/02/23/hello-world/"> -->
+</head>
+
+<body class="post-template-default single single-post postid-1 single-format-standard has-header-image has-sidebar colors-light">
+<div id="page" class="site">
+	<header id="masthead" class="site-header" role="banner">
+		<div class="custom-header" style="margin-bottom: 0px;">
+			<div class="custom-header-media">
+				<div id="wp-custom-header" class="wp-custom-header">
+					<img src="assets/header.jpg" width="2000" height="1200" alt="${blogTitle}">
+				</div>
+			</div>
+			<div class="site-branding" style="margin-bottom: 0px;">
+				<div class="wrap">
+					<div class="site-branding-text">
+						<p class="site-title"><a href="/" rel="home" id="_blogTitle"></a></p>
+<!--						<p class="site-description">Just another WordPress site</p> -->
+					</div><!-- .site-branding-text -->
+				</div><!-- .wrap -->
+			</div><!-- .site-branding -->
+		</div><!-- .custom-header -->
+	</header><!-- #masthead -->
+	<div class="site-content-contain">
+		<div id="content" class="site-content">
+			<div class="wrap">
+				<div id="primary" class="content-area">
+					<main id="main" class="site-main" role="main">
+						<article id="post-1" class="post-1 post type-post status-publish format-standard hentry category-uncategorized">
+							<header class="entry-header">
+<!--
+								<div class="entry-meta">
+									<span class="posted-on">
+										<time class="entry-date published updated" datetime="2017-02-23T01:51:19+00:00">February 23, 2017</time>
+									</span>
+								</div>
+-->
+								<h1 class="entry-title" id="_title"></h1>
+							</header><!-- .entry-header -->
+							<div class="entry-content">
+								<p id="_content"></p>
+							</div><!-- .entry-content -->
+						</article><!-- #post-## -->
+					</main><!-- #main -->
+				</div><!-- #primary -->
+				<aside id="secondary" class="widget-area" role="complementary">
+<!--
+					<section id="recent-posts-2" class="widget widget_recent_entries">
+						<h2 class="widget-title">Recent Posts</h2>
+						<ul>
+							<li>
+								<a href="https://www.s-shirayama.com/tmp/wordpress/index.php/2017/02/23/%e3%82%bf%e3%82%a4%e3%83%88%e3%83%ab/">タイトル</a>
+							</li>
+							<li>
+								<a href="https://www.s-shirayama.com/tmp/wordpress/index.php/2017/02/23/hello-world/">Hello world!</a>
+							</li>
+						</ul>
+					</section>
+-->
+				</aside><!-- #secondary -->
+			</div><!-- .wrap -->
+		</div><!-- #content -->
+		<footer id="colophon" class="site-footer" role="contentinfo">
+			<div class="wrap">
+				<div class="site-info" id="_footer"></div>
+			</div><!-- .wrap -->
+		</footer><!-- #colophon -->
+	</div><!-- .site-content-contain -->
+</div><!-- #page -->
+
+<script>
+	(function() {
+
+		var getUrl = function() {
+			var url = window.location.href.split('#!')[1];
+			if (typeof url === 'undefined') {
+				url = window.location.href.split('?_escaped_fragment_=')[1];
+			}
+			if (typeof url === 'undefined') return null;
+			return url.replace(/\//g, '');
+		}
+
+		var jsonUrl = 'https://s3-ap-northeast-1.amazonaws.com/serverless-cdn/';
+		var load = function(path, callback) {
+			$.ajax({
+				type: 'GET',
+				url: jsonUrl + path,
+				dataType: 'json',
+				success: callback
+			});
+		}
+
+		// Load blog info
+		load('_assets/meta/blog.json', (json) => {
+			$('#_blogTitle').html(json.title);
+			$('#_footer').html(json.footer);
+			document.title = document.title.replace(/{blogTitle}/, json.title);
+		});
+
+		var url = getUrl();
+		if (url !== null) {
+			// Load article detail
+			load('_assets/article/' + getUrl() + '.json', (json) => {
+				$('#_title').html(json.title);
+				$('#_content').html(json.content);
+				document.title = document.title.replace(/{articleTitle}/, json.title);
+			});
+		}
+
+
+
+	})();
+
+</script>
+</body></html>

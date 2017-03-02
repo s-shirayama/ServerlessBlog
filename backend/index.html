@@ -1,0 +1,343 @@
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
+<script src="https://sdk.amazonaws.com/js/aws-sdk-2.16.0.min.js"></script>
+
+Access Key : <input type="text" id="access_key" size="40" />
+<br />
+Secret Key : <input type="password" id="secret_key" size="40" />
+<br />
+<button type="button" id="login">Save</button>
+<br /><br />
+<button type="button" id="list">Load</button>
+<br />
+
+<h2>Table:</h2>
+<br />
+<table border="1" cellspacing="0" id="tableAll" style="display: none;">
+  <tr bgcolor="#ff6633">
+    <td>ID</td>
+    <td>TITLE</td>
+    <td>DATE</td>
+    <td>URL</td>
+    <td>Published</td>
+    <td>Edit</td>
+    <td>Change URL</td>
+  </tr>
+<tbody id="table"></tbody></table>
+<br />
+<button type="button" id="add" style="display: none;">Add</button>
+
+<h2>Change URL:</h2>
+<button type="button" id="changeUrl">Change</button><br />
+ID: <span id="changeUrlId"></span><br />
+Current Url: <span id="currentUrl"></span><br />
+New Url: <input type="text" id="newUrl" /><br />
+
+<h2>Edit Detail:</h2>
+<button type="button" id="update">Update</button>
+<button type="button" id="delete">Delete</button>
+<button type="button" id="publish">Publish</button>
+<button type="button" id="unpublish">Unpublish</button>
+<br />
+ID: <span id="detailId"></span><br />
+Title: <input type="text" id="detailTitle" /><br />
+Url: <input type="text" id="detailUrl" /><br />
+Date: <span id="detailDate"></span><br />
+Published: <span id="detailPublished"></span><br />
+Content: 
+<br />
+<textarea id="detailContent" rows="20" cols="100"></textarea>
+
+<script>
+
+class S3Base {
+
+  constructor(accessKey, secretKey, bucketName) {
+    this.configure(accessKey, secretKey);
+    this.bucket = bucketName;
+  }
+
+  configure(accessKey, secretKey) {
+    AWS.config.update({accessKeyId: accessKey, secretAccessKey: secretKey});
+    this.s3 = new AWS.S3({region: 'ap-northeast-1', maxRetries: 1});
+  }
+
+  get(path, callback, defaultValue) {
+    this.s3.getObject({
+      Bucket: this.bucket,
+      Key: path
+    }, (error, data) => {
+      if (error) {
+        if (typeof defaultValue !== 'undefined' && error.statusCode === 404) {
+          // If object does not exist, empty object will be posted.
+          this.post(path, defaultValue);
+          callback.apply(this, [defaultValue]);
+        } else {
+          console.log(error);
+        }
+      } else {
+        callback.apply(this, [data.Body.toString()]);
+      }
+    });
+  }
+  
+  post(path, body) {
+    this.s3.putObject({
+      Bucket: this.bucket,
+      Key: path,
+      ContentType: 'text/plain',
+      Body: body
+    }, function(error, data) {
+      if (error) {
+        console.log(error); // an error occurred
+      } else {
+      }
+    });
+  }
+
+  delete(path) {
+    this.s3.deleteObject({
+      Bucket: this.bucket,
+      Key: path,
+    }, function(error, data) {
+      if (error) {
+        console.log(error); // an error occurred
+      } else {
+      }
+    });
+  }
+}
+
+class S3Data extends S3Base {
+
+  constructor(accessKey, secretKey, bucketName) {
+    super(accessKey, secretKey, bucketName);
+    this.article = 'articles.json';
+    this.detail = 'detail/';
+  }
+
+  getArticles(callback) {
+    this.get(this.article, function(res) {
+      var json = JSON.parse(res);
+      for (var id in json.articles) {
+//        json.articles[id].published = 1;
+      }
+      callback.apply(this, [json]);
+    }, JSON.stringify({}));
+  }
+
+  getDetail(id, callback) {
+    if (id === null) {
+      callback.apply(this, [{}]);
+      return;
+    }
+    this.get(this.detail + id + '.json', (res) => {
+      callback.apply(this, [JSON.parse(res)]);
+    }, JSON.stringify({}));
+  }
+
+  deleteDetail(id, callback) {
+    this.getArticles((articles) => {
+      delete articles[id];
+      this.postArticles(articles);
+      callback.apply(this, [articles]);
+    });
+    this.delete(this.detail + id + '.json');
+  }
+
+  _postDetail(id, article) {
+    this.post(this.detail + id + '.json', JSON.stringify({
+      title: article.title,
+      url: article.url,
+      date: article.date,
+      published: article.published,
+      content: article.content
+    }));
+  }
+
+  postDetail(id, updatedData, callback) {
+    this.getArticles((articles) => {
+      if (id !== null && typeof articles[id] !== 'undefined') {
+        // Update Existing Article
+        this.getDetail(id, (article) => {
+          this._postDetail(id, $.extend(article, updatedData));
+        });
+        for (var key in articles[id]) {
+          if (typeof updatedData[key] !== 'undefined') {
+            articles[id][key] = updatedData[key];
+          }
+        }
+      } else {
+        // Post new article
+        if (id === null) {
+          id = Math.max.apply(null, Object.keys(articles)) + 1;
+        }
+        this._postDetail(id, updatedData);
+        articles[id] = updatedData;
+      }
+      s3Data.postArticles(articles);
+      callback.apply(this, [articles]);
+    });
+  }
+
+  postArticles(rows) {
+    this.post(this.article, JSON.stringify(rows));
+  }
+}
+
+class S3Html extends S3Base {
+
+  constructor(accessKey, secretKey, bucketName) {
+    super(accessKey, secretKey, bucketName);
+    this.prefix = '_assets/article/';
+    this.suffix = '.json';
+  }
+
+  getHtml(url, callback) {
+    this.get(this.prefix + url + this.suffix, callback);
+  }
+
+  deleteHtml(url) {
+    this.delete(this.prefix + url + this.suffix);
+  }
+
+  postHtml(url, content) {
+    this.post(this.prefix + url + this.suffix, content);
+  }
+
+  moveHtml(currentUrl, newUrl) {
+    this.getHtml(currentUrl, (content) => {
+      this.postHtml(newUrl, content);
+      this.deleteHtml(currentUrl);
+    })
+  }
+}
+
+/////
+
+$('#access_key').val(localStorage.getItem('akey'));
+$('#secret_key').val(localStorage.getItem('skey'));
+
+var s3Data = new S3Data(localStorage.getItem('akey'), localStorage.getItem('skey'), 'serverless-data');
+var s3Html = new S3Html(localStorage.getItem('akey'), localStorage.getItem('skey'), 'serverless-cdn');
+
+updateRow = function(rows) {
+  $('#table').html('');
+  for (var id in rows) {
+    $('#table').append('<tr id="row' + id + '"><td>' + [
+      id,
+      rows[id].title,
+      rows[id].date,
+      rows[id].url,
+      rows[id].published,
+      '<button type="button" onclick="_edit(\'' + id + '\');">Edit</button>',
+      (rows[id].published == 1) ? '<button type="button" onclick="_changeUrl(\'' + id + '\');">Change URL</button>' : '',
+    ].join('</td><td>') + '</td></tr>');
+  }
+};
+
+clearDetail = function() {
+  $('#detailId').html('');
+  $('#detailTitle').val('');
+  $('#detailUrl').val('');
+  $('#detailDate').html('');
+  $('#detailContent').val('');
+};
+
+_edit = function(id) {
+  s3Data.getDetail(id, function(res) {
+    $('#detailId').html(id);
+    $('#detailTitle').val(res.title);
+    $('#detailUrl').val(res.url);
+    $('#detailUrl').prop('disabled', (res.published == 1));
+    $('#detailDate').html(res.date);
+    $('#detailPublished').html(res.published);
+    $('#detailContent').val(res.content);
+  });
+};
+
+_changeUrl = function(id) {
+  s3Data.getDetail(id, function(article) {
+    $('#changeUrlId').html(id);
+    $('#currentUrl').html(article.url);
+    $('#newUrl').val('');
+  });
+};
+
+$('#login').on('click', function(){
+  localStorage.setItem('akey', $('#access_key').val());
+  localStorage.setItem('skey', $('#secret_key').val());
+  s3Data.configure(localStorage.getItem('akey'), localStorage.getItem('skey'));
+  s3Html.configure(localStorage.getItem('akey'), localStorage.getItem('skey'));
+});
+
+$('#add').on('click', function() {
+  var now = new Date();
+  var yyyymmdd = now.getFullYear() + '-' +
+    ( "0"+( now.getMonth()+1 ) ).slice(-2) + '-' +
+    ( "0"+now.getDate() ).slice(-2);
+  $('#detailId').html('');
+  $('#detailTitle').val('(TITLE)');
+  $('#detailUrl').val('(URL)');
+  $('#detailUrl').prop('disabled', false);
+  $('#detailDate').html(yyyymmdd);
+  $('#detailPublished').html(0);
+  $('#detailContent').val('');
+});
+
+$('#list').on('click', function(){
+  $(this).hide();
+  $('#add').show();
+  $('#tableAll').show();
+  s3Data.getArticles(updateRow);
+});
+
+$('#delete').on('click', function(){
+  var id = $('#detailId').html();
+  s3Data.deleteDetail(id, updateRow);
+  clearDetail();
+});
+
+$('#changeUrl').on('click', function(){
+  var id = $('#changeUrlId').html();
+  var currentUrl = $('#currentUrl').html();
+  var newUrl = $('#newUrl').val();
+  s3Html.moveHtml(currentUrl, newUrl);
+  s3Data.postDetail(id, {url: newUrl}, updateRow);
+});
+
+$('#publish').on('click', function(){
+  var id = $('#detailId').html();
+  s3Data.getDetail(id, (article) => {
+    s3Html.postHtml(article.url, JSON.stringify({
+      title: article.title,
+      content: article.content
+    }));
+    s3Data.postDetail(id, {published: 1}, updateRow);
+  });
+});
+
+$('#unpublish').on('click', function(){
+  var id = $('#detailId').html();
+  s3Data.getDetail(id, (article) => {
+    s3Html.deleteHtml(article.url);
+    s3Data.postDetail(id, {published: 0}, updateRow);
+  });
+});
+
+$('#update').on('click', function(){
+  var id = $('#detailId').html();
+  var title = $('#detailTitle').val();
+  var url = $('#detailUrl').val();
+  var date = $('#detailDate').html();
+  var published = $('#detailPublished').html();
+  var content = $('#detailContent').val();
+  if (id === '') id = null;
+  s3Data.postDetail(id, {
+    title: title,
+    url: url,
+    date: date,
+    published: published,
+    content: content
+  }, updateRow);
+});
+</script>
