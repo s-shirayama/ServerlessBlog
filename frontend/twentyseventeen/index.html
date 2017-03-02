@@ -22,7 +22,7 @@
 				<div class="wrap">
 					<div class="site-branding-text">
 						<p class="site-title"><a href="/" rel="home" id="_blogTitle"></a></p>
-<!--						<p class="site-description">Just another WordPress site</p> -->
+						<p class="site-description" id="_blogSubTitle"></p>
 					</div><!-- .site-branding-text -->
 				</div><!-- .wrap -->
 			</div><!-- .site-branding -->
@@ -35,13 +35,11 @@
 					<main id="main" class="site-main" role="main">
 						<article id="post-1" class="post-1 post type-post status-publish format-standard hentry category-uncategorized">
 							<header class="entry-header">
-<!--
 								<div class="entry-meta">
 									<span class="posted-on">
-										<time class="entry-date published updated" datetime="2017-02-23T01:51:19+00:00">February 23, 2017</time>
+										<time class="entry-date published updated" datetime="" id="_date"></time>
 									</span>
 								</div>
--->
 								<h1 class="entry-title" id="_title"></h1>
 							</header><!-- .entry-header -->
 							<div class="entry-content">
@@ -51,19 +49,10 @@
 					</main><!-- #main -->
 				</div><!-- #primary -->
 				<aside id="secondary" class="widget-area" role="complementary">
-<!--
 					<section id="recent-posts-2" class="widget widget_recent_entries">
 						<h2 class="widget-title">Recent Posts</h2>
-						<ul>
-							<li>
-								<a href="https://www.s-shirayama.com/tmp/wordpress/index.php/2017/02/23/%e3%82%bf%e3%82%a4%e3%83%88%e3%83%ab/">タイトル</a>
-							</li>
-							<li>
-								<a href="https://www.s-shirayama.com/tmp/wordpress/index.php/2017/02/23/hello-world/">Hello world!</a>
-							</li>
-						</ul>
+						<ul id="_recentPosts"></ul>
 					</section>
--->
 				</aside><!-- #secondary -->
 			</div><!-- .wrap -->
 		</div><!-- #content -->
@@ -100,6 +89,7 @@
 		// Load blog info
 		load('_assets/meta/blog.json', (json) => {
 			$('#_blogTitle').html(json.title);
+			$('#_blogSubTitle').html(json.subTitle);
 			$('#_footer').html(json.footer);
 			document.title = document.title.replace(/{blogTitle}/, json.title);
 		});
@@ -110,13 +100,27 @@
 			load('_assets/article/' + getUrl() + '.json', (json) => {
 				$('#_title').html(json.title);
 				$('#_content').html(json.content);
+				var now = new Date(json.date);
+				var month = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+				$('#_date').html(month[now.getMonth()] + ' ' + now.getDate() + ', ' + now.getFullYear()).attr('datetime', json.date + 'T00:00:00+09:00');
 				document.title = document.title.replace(/{articleTitle}/, json.title);
 			});
-		}
+		} else {
+			// Load Articles
+  		load('_assets/meta/articles_0000.json', (json) => {
+  			console.log(json);
+  		});
+  	}
 
-
+		// Load Articles
+ 		load('_assets/meta/articles_0000.json', (json) => {
+ 			var recentPosts = $('#_recentPosts');
+ 			for (var article of json) {
+   			console.log(article);
+   			recentPosts.append($('<li>').append($('<a>').attr('href', 'index.html#!/' + article.url + '/').html(article.title).on('click', function(){location.reload();})));
+ 			}
+ 		});
 
 	})();
-
 </script>
 </body></html>

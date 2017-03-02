@@ -105,6 +105,13 @@ class S3Base {
       }
     });
   }
+
+  move(currentPath, newPath) {
+    this.get(currentPath, (content) => {
+      this.post(newPath, content);
+      this.delete(currentPath);
+    })
+  }
 }
 
 class S3Data extends S3Base {
@@ -172,6 +179,7 @@ class S3Data extends S3Base {
           id = Math.max.apply(null, Object.keys(articles)) + 1;
         }
         this._postDetail(id, updatedData);
+        delete updatedData['content'];
         articles[id] = updatedData;
       }
       s3Data.postArticles(articles);
@@ -188,27 +196,53 @@ class S3Html extends S3Base {
 
   constructor(accessKey, secretKey, bucketName) {
     super(accessKey, secretKey, bucketName);
-    this.prefix = '_assets/article/';
-    this.suffix = '.json';
+    this.settings = {
+      article: {
+        prefix: '_assets/article/',
+        suffix: '.json',
+        json: true
+      },
+      articles: {
+        prefix: '_assets/meta/articles_',
+        suffix: '.json',
+        json: true
+      },
+      // s3Html.postHtml('blog', '', {title: 'Serverlessブログ', footer: 'serverlessなブログ', subTitle: 'Blog Site with Serverless Architecture'})
+      blog: {
+        prefix: '_assets/meta/blog',
+        suffix: '.json',
+        json: true
+      }
+    };
   }
 
-  getHtml(url, callback) {
-    this.get(this.prefix + url + this.suffix, callback);
+  getHtml(type, url, callback) {
+    this.get(this._getPath(type, url), (res) => {
+      if (this.settings[type].json) {
+        callback.apply(this, [JSON.parse(res)]);
+      } else {
+        callback.apply(this, [res]);
+      }
+    });
   }
 
-  deleteHtml(url) {
-    this.delete(this.prefix + url + this.suffix);
+  deleteHtml(type, url) {
+    this.delete(this._getPath(type, url));
   }
 
-  postHtml(url, content) {
-    this.post(this.prefix + url + this.suffix, content);
+  postHtml(type, url, content) {
+    if (this.settings[type].json) {
+      content = JSON.stringify(content);
+    }
+    this.post(this._getPath(type, url), content);
   }
 
-  moveHtml(currentUrl, newUrl) {
-    this.getHtml(currentUrl, (content) => {
-      this.postHtml(newUrl, content);
-      this.deleteHtml(currentUrl);
-    })
+  moveHtml(type, currentUrl, newUrl) {
+    this.move(this._getPath(type, currentUrl), this._getPath(type, newUrl));
+  }
+
+  _getPath(type, url) {
+    return this.settings[type].prefix + url + this.settings[type].suffix;
   }
 }
 
@@ -293,7 +327,12 @@ $('#list').on('click', function(){
 
 $('#delete').on('click', function(){
   var id = $('#detailId').html();
-  s3Data.deleteDetail(id, updateRow);
+  s3Data.getDetail(id, (article) => {
+    if (article.published == 1) {
+      s3Html.deleteHtml('article', article.url);
+    }
+    s3Data.deleteDetail(id, updateRow);
+  })
   clearDetail();
 });
 
@@ -301,25 +340,36 @@ $('#changeUrl').on('click', function(){
   var id = $('#changeUrlId').html();
   var currentUrl = $('#currentUrl').html();
   var newUrl = $('#newUrl').val();
-  s3Html.moveHtml(currentUrl, newUrl);
+  s3Html.moveHtml('article', currentUrl, newUrl);
   s3Data.postDetail(id, {url: newUrl}, updateRow);
 });
 
 $('#publish').on('click', function(){
   var id = $('#detailId').html();
   s3Data.getDetail(id, (article) => {
-    s3Html.postHtml(article.url, JSON.stringify({
+    s3Html.postHtml('article', article.url, {
       title: article.title,
-      content: article.content
-    }));
-    s3Data.postDetail(id, {published: 1}, updateRow);
+      content: article.content,
+      date: article.date
+    });
+    s3Data.postDetail(id, {published: 1}, (articles) => {
+      updateRow(articles);
+      var filteredArticles = Object.values(articles).filter((item, idx) => {
+        if (item.published == 1) return true;
+      }).sort((a, b) => {
+        if(a.date > b.date) return -1;
+        if(a.date < b.date) return 1;
+        return 0;
+      });
+      s3Html.postHtml('articles', '0000', filteredArticles);
+    });
   });
 });
 
 $('#unpublish').on('click', function(){
   var id = $('#detailId').html();
   s3Data.getDetail(id, (article) => {
-    s3Html.deleteHtml(article.url);
+    s3Html.deleteHtml('article', article.url);
     s3Data.postDetail(id, {published: 0}, updateRow);
   });
 });
@@ -339,5 +389,12 @@ $('#update').on('click', function(){
     published: published,
     content: content
   }, updateRow);
+  if (published == 1) {
+    s3Html.postHtml('article', url, {
+      titile: title,
+      date: date,
+      content: content
+    });
+  }
 });
 </script>
