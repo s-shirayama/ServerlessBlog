@@ -47,6 +47,14 @@ Content:
 <br />
 <textarea id="detailContent" rows="20" cols="100"></textarea>
 
+<h2>Images:</h2>
+<button type="button" id="imageUpload">Upload</button>
+<button type="button" id="imageList">List</button>
+<br />
+<input type="file" id="image" /><br />
+Image Name: <input type="text" id="imageName" /><br />
+<div id="images"></div>
+
 <script>
 
 class S3Base {
@@ -80,11 +88,14 @@ class S3Base {
     });
   }
   
-  post(path, body) {
+  post(path, body, contentType) {
+    if (typeof contentType === 'undefined') {
+      contentType = 'text/plain';
+    }
     this.s3.putObject({
       Bucket: this.bucket,
       Key: path,
-      ContentType: 'text/plain',
+      ContentType: contentType,
       Body: body
     }, function(error, data) {
       if (error) {
@@ -112,6 +123,15 @@ class S3Base {
       this.delete(currentPath);
     })
   }
+
+  list(path, callback) {
+    this.s3.listObjects({
+      Bucket: this.bucket,
+      Prefix: path
+    }, (err, data) => {
+      callback.apply(this, [data.Contents]);
+    })
+  }
 }
 
 class S3Data extends S3Base {
@@ -120,6 +140,7 @@ class S3Data extends S3Base {
     super(accessKey, secretKey, bucketName);
     this.article = 'articles.json';
     this.detail = 'detail/';
+    this.assets = 'assets/';
   }
 
   getArticles(callback) {
@@ -189,6 +210,21 @@ class S3Data extends S3Base {
 
   postArticles(rows) {
     this.post(this.article, JSON.stringify(rows));
+  }
+
+  postImage(id, fileName, file) {
+    this.post(this.assets + id + '/' + fileName, file, file.type);
+  }
+
+  getImages(id, callback) {
+    this.list(this.assets + id + '/', (images) => {
+      // Add signed URL and file name
+      for (var key in images) {
+        images[key].url = this.s3.getSignedUrl('getObject', {Bucket: this.bucket, Key: images[key].Key});
+        images[key].fileName = images[key].Key.split('/' + id + '/').pop();
+      }
+      callback.apply(this, [images]);
+    });
   }
 }
 
@@ -397,4 +433,34 @@ $('#update').on('click', function(){
     });
   }
 });
+
+$('#imageUpload').on('click', () => {
+  var id = $('#detailId').html();
+  if ($('#image')[0].files.length === 0 || id === '') return;
+  var file = $('#image')[0].files[0];
+  var imageName = $('#imageName').val();
+  var fileName = file.name;
+  if (imageName !== '') {
+    fileName = imageName + '.' + fileName.split('.').pop();
+  }
+  s3Data.postImage(id, fileName, file);
+});
+
+$('#imageList').on('click', () => {
+  var id = $('#detailId').html();
+  if (id === '') return;
+  s3Data.getImages(id, (images) => {
+    for (var image of images) {
+      $('#images')
+        .append(image.fileName)
+        .append($('<br>'))
+        .append($('<img>').attr('src', image.url).css({
+          'max-width': 200,
+          'max-height': 200
+        }))
+        .append($('<br>'));
+    }
+  });
+});
+
 </script>
