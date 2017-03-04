@@ -20,23 +20,15 @@ Secret Key : <input type="password" id="secret_key" size="40" />
     <td>URL</td>
     <td>Published</td>
     <td>Edit</td>
-    <td>Change URL</td>
+    <td>Delete</td>
+    <td>Publish</td>
   </tr>
 <tbody id="table"></tbody></table>
 <br />
 <button type="button" id="add" style="display: none;">Add</button>
 
-<h2>Change URL:</h2>
-<button type="button" id="changeUrl">Change</button><br />
-ID: <span id="changeUrlId"></span><br />
-Current Url: <span id="currentUrl"></span><br />
-New Url: <input type="text" id="newUrl" /><br />
-
 <h2>Edit Detail:</h2>
 <button type="button" id="update">Update</button>
-<button type="button" id="delete">Delete</button>
-<button type="button" id="publish">Publish</button>
-<button type="button" id="unpublish">Unpublish</button>
 <br />
 ID: <span id="detailId"></span><br />
 Title: <input type="text" id="detailTitle" /><br />
@@ -48,11 +40,11 @@ Content:
 <textarea id="detailContent" rows="20" cols="100"></textarea>
 
 <h2>Images:</h2>
-<button type="button" id="imageUpload">Upload</button>
+<button type="button" id="imageUpload" disabled=true>Upload</button>
 <button type="button" id="imageList">List</button>
 <br />
 <input type="file" id="image" /><br />
-Image Name: <input type="text" id="imageName" /><br />
+Image Name: <input type="text" id="imageName" size="40" /> <span id="imageSuffix"></span><br />
 <div id="images"></div>
 
 <script>
@@ -69,68 +61,80 @@ class S3Base {
     this.s3 = new AWS.S3({region: 'ap-northeast-1', maxRetries: 1});
   }
 
-  get(path, callback, defaultValue) {
-    this.s3.getObject({
-      Bucket: this.bucket,
-      Key: path
-    }, (error, data) => {
-      if (error) {
+  get(path, defaultValue) {
+    return new Promise(resolve => {
+      this.s3.getObject({
+        Bucket: this.bucket,
+        Key: path
+      }).promise().then(data => {
+        resolve({content: data.Body.toString(), data: data, key: path});
+      }).catch(error => {
         if (typeof defaultValue !== 'undefined' && error.statusCode === 404) {
           // If object does not exist, empty object will be posted.
           this.post(path, defaultValue);
-          callback.apply(this, [defaultValue]);
+          resolve({content: defaultValue, data: null, key: path});
         } else {
           console.log(error);
+          resolve(null);
         }
-      } else {
-        callback.apply(this, [data.Body.toString()]);
-      }
+      });
     });
   }
-  
+
   post(path, body, contentType) {
-    if (typeof contentType === 'undefined') {
-      contentType = 'text/plain';
-    }
-    this.s3.putObject({
-      Bucket: this.bucket,
-      Key: path,
-      ContentType: contentType,
-      Body: body
-    }, function(error, data) {
-      if (error) {
-        console.log(error); // an error occurred
-      } else {
+    return new Promise(resolve => {
+      if (typeof contentType === 'undefined') {
+        contentType = 'text/plain';
       }
+      this.s3.putObject({
+        Bucket: this.bucket,
+        Key: path,
+        ContentType: contentType,
+        Body: body
+      }).promise().then(data => {
+        resolve();
+      }).catch(error => {
+        console.log(error);
+        resolve();
+      })
     });
   }
 
   delete(path) {
-    this.s3.deleteObject({
-      Bucket: this.bucket,
-      Key: path,
-    }, function(error, data) {
-      if (error) {
-        console.log(error); // an error occurred
-      } else {
-      }
+    return new Promise(resolve => {
+      this.s3.deleteObject({
+        Bucket: this.bucket,
+        Key: path,
+      }).promise().then(data => {
+        resolve();
+      }).catch(err => {
+        console.log(err);
+        resolve();
+      });
     });
   }
 
-  move(currentPath, newPath) {
-    this.get(currentPath, (content) => {
-      this.post(newPath, content);
-      this.delete(currentPath);
-    })
+  list(path) {
+    return new Promise(resolve => {
+      this.s3.listObjects({
+        Bucket: this.bucket,
+        Prefix: path
+      }).promise().then(data => {
+        resolve(data.Contents);
+      }).catch(err => {
+        console.log(err);
+        resolve(null);
+      });
+    });
   }
 
-  list(path, callback) {
-    this.s3.listObjects({
-      Bucket: this.bucket,
-      Prefix: path
-    }, (err, data) => {
-      callback.apply(this, [data.Contents]);
-    })
+  // not used now
+  async move(currentPath, newPath) {
+    var data = await this.get(currentPath);
+    if (data !== null) {
+      this.post(newPath, data.content);
+      this.delete(currentPath);
+    }
   }
 }
 
@@ -143,36 +147,32 @@ class S3Data extends S3Base {
     this.assets = 'assets/';
   }
 
-  getArticles(callback) {
-    this.get(this.article, function(res) {
-      var json = JSON.parse(res);
-      for (var id in json.articles) {
-//        json.articles[id].published = 1;
-      }
-      callback.apply(this, [json]);
-    }, JSON.stringify({}));
+  async getArticles() {
+    var res = await this.get(this.article, JSON.stringify({}));
+    return JSON.parse(res.content);
   }
 
-  getDetail(id, callback) {
+  async postArticles(rows) {
+    return await this.post(this.article, JSON.stringify(rows));
+  }
+
+  async getArticle(id) {
     if (id === null) {
-      callback.apply(this, [{}]);
-      return;
+      return {};
     }
-    this.get(this.detail + id + '.json', (res) => {
-      callback.apply(this, [JSON.parse(res)]);
-    }, JSON.stringify({}));
+    var res = await this.get(this.detail + id + '.json', JSON.stringify({}));
+    return JSON.parse(res.content);
   }
 
-  deleteDetail(id, callback) {
-    this.getArticles((articles) => {
-      delete articles[id];
-      this.postArticles(articles);
-      callback.apply(this, [articles]);
-    });
+  async deleteArticle(id) {
     this.delete(this.detail + id + '.json');
+    var articles = await this.getArticles();
+    delete articles[id];
+    this.postArticles(articles);
+    return {articles: articles};
   }
 
-  _postDetail(id, article) {
+  async _postArticle(id, article) {
     this.post(this.detail + id + '.json', JSON.stringify({
       title: article.title,
       url: article.url,
@@ -182,49 +182,45 @@ class S3Data extends S3Base {
     }));
   }
 
-  postDetail(id, updatedData, callback) {
-    this.getArticles((articles) => {
-      if (id !== null && typeof articles[id] !== 'undefined') {
-        // Update Existing Article
-        this.getDetail(id, (article) => {
-          this._postDetail(id, $.extend(article, updatedData));
-        });
-        for (var key in articles[id]) {
-          if (typeof updatedData[key] !== 'undefined') {
-            articles[id][key] = updatedData[key];
-          }
+  async postArticle(id, updatedData) {
+    var articles = await this.getArticles();
+    var newArticle, prevArticle = null;
+    if (id !== null && typeof articles[id] !== 'undefined') {
+      // Update Existing Article
+      var article = await this.getArticle(id);
+      prevArticle = Object.assign({}, article);
+      newArticle = Object.assign(article, updatedData);
+      this._postArticle(id, newArticle);
+      for (var key in articles[id]) {
+        if (typeof updatedData[key] !== 'undefined') {
+          articles[id][key] = updatedData[key];
         }
-      } else {
-        // Post new article
-        if (id === null) {
-          id = Math.max.apply(null, Object.keys(articles)) + 1;
-        }
-        this._postDetail(id, updatedData);
-        delete updatedData['content'];
-        articles[id] = updatedData;
       }
-      s3Data.postArticles(articles);
-      callback.apply(this, [articles]);
-    });
-  }
-
-  postArticles(rows) {
-    this.post(this.article, JSON.stringify(rows));
-  }
-
-  postImage(id, fileName, file) {
-    this.post(this.assets + id + '/' + fileName, file, file.type);
-  }
-
-  getImages(id, callback) {
-    this.list(this.assets + id + '/', (images) => {
-      // Add signed URL and file name
-      for (var key in images) {
-        images[key].url = this.s3.getSignedUrl('getObject', {Bucket: this.bucket, Key: images[key].Key});
-        images[key].fileName = images[key].Key.split('/' + id + '/').pop();
+    } else {
+      // Post new article
+      if (id === null) {
+        id = Math.max.apply(null, Object.keys(articles)) + 1;
       }
-      callback.apply(this, [images]);
-    });
+      this._postArticle(id, updatedData);
+      newArticle = updatedData;
+      delete updatedData['content'];
+      articles[id] = updatedData;
+    }
+    this.postArticles(articles);
+    return {articles: articles, article: newArticle, prev: prevArticle};
+  }
+
+  async getImages(id) {
+    var images = await this.list(this.assets + id + '/');
+    for (var key in images) {
+      images[key].url = this.s3.getSignedUrl('getObject', {Bucket: this.bucket, Key: images[key].Key});
+      images[key].fileName = images[key].Key.split('/' + id + '/').pop();
+    }
+    return images;
+  }
+
+  async postImage(id, fileName, file) {
+    return await this.post(this.assets + id + '/' + fileName, file, file.type);
   }
 }
 
@@ -248,33 +244,39 @@ class S3Html extends S3Base {
         prefix: '_assets/meta/blog',
         suffix: '.json',
         json: true
+      },
+      image: {
+        prefix: '_assets/image/',
+        suffix: '',
+        json: false
       }
     };
   }
 
-  getHtml(type, url, callback) {
-    this.get(this._getPath(type, url), (res) => {
-      if (this.settings[type].json) {
-        callback.apply(this, [JSON.parse(res)]);
-      } else {
-        callback.apply(this, [res]);
-      }
-    });
+  async deleteHtml(type, url) {
+    return await this.delete(this._getPath(type, url));
   }
 
-  deleteHtml(type, url) {
-    this.delete(this._getPath(type, url));
-  }
-
-  postHtml(type, url, content) {
+  async postHtml(type, url, content) {
     if (this.settings[type].json) {
       content = JSON.stringify(content);
     }
-    this.post(this._getPath(type, url), content);
+    return await this.post(this._getPath(type, url), content);
   }
 
-  moveHtml(type, currentUrl, newUrl) {
-    this.move(this._getPath(type, currentUrl), this._getPath(type, newUrl));
+  async getImages(id) {
+    return await this.list(this._getPath('image', id + '/'));
+  }
+
+  async deleteImages(id) {
+    var images = await this.getImages(id);
+    await Promise.all(images.map(async (image) => {
+      await this.delete(image.Key);
+    }));
+  }
+
+  async postImage(id, fileName, content) {
+    return await this.post(this._getPath('image', id + '/' + fileName), content.Body, content.ContentType);
   }
 
   _getPath(type, url) {
@@ -282,15 +284,93 @@ class S3Html extends S3Base {
   }
 }
 
+class Controller {
+  constructor(accessKey, secretKey, dataBucket, htmlBucket) {
+    this.s3Data = new S3Data(accessKey, secretKey, dataBucket);
+    this.s3Html = new S3Html(accessKey, secretKey, htmlBucket);
+  }
+
+  configure(accessKey, secretKey) {
+    this.s3Data.configure(accessKey, secretKey);
+    this.s3Html.configure(accessKey, secretKey);
+  }
+
+  async getDataImages(id) {
+    return await this.s3Data.getImages(id);
+  }
+
+  async postDataImage(id, fileName, file) {
+    return await this.s3Data.postImage(id, fileName, file);
+  }
+
+  async updateHtmlImagesFromDataImages(id) {
+    // Delete current images on HTML
+    await this.s3Html.deleteImages(id);
+
+    // Copy images from DATA to HTML
+    for (var image of await this.s3Data.getImages(id)) {
+      var data = await this.s3Data.get(image.Key);
+      this.s3Html.postImage(1, data.key.split('/').pop(), data.data);
+    }
+  }
+
+  async getArticles() {
+    return await this.s3Data.getArticles();
+  }
+
+  async getArticle(id) {
+    return await this.s3Data.getArticle(id);
+  }
+
+  async deleteArticle(id) {
+    var article = await this.getArticle(id);
+    this.s3Html.deleteHtml('article', article.url);
+    var res = await this.s3Data.deleteArticle(id);
+    this._updateArticlesList(res.articles);
+    return res;
+  }
+
+  async postArticle(id, data) {
+    var res = await this.s3Data.postArticle(id, data);
+    if (res.article.published == 1) {
+      this.s3Html.postHtml('article', res.article.url, {
+        title: res.article.title,
+        content: res.article.content,
+        date: res.article.date
+      });
+      if (res.prev !== null && res.prev.url !== res.article.url) {
+        this.s3Html.deleteHtml('article', res.prev.url);
+      }
+    } else {
+      this.s3Html.deleteHtml('article', res.article.url);
+    }
+    this._updateArticlesList(res.articles);
+    return res;
+  }
+
+  _updateArticlesList(articles) {
+    var filteredArticles = Object.values(articles).filter((item, idx) => {
+      if (item.published == 1) return true;
+    }).sort((a, b) => {
+      if(a.date > b.date) return -1;
+      if(a.date < b.date) return 1;
+      return 0;
+    });
+    this.s3Html.postHtml('articles', '0000', filteredArticles);
+  }
+}
+
 /////
+
+var ctrl = new Controller(localStorage.getItem('akey'), localStorage.getItem('skey'), 'serverless-data', 'serverless-cdn');
 
 $('#access_key').val(localStorage.getItem('akey'));
 $('#secret_key').val(localStorage.getItem('skey'));
 
-var s3Data = new S3Data(localStorage.getItem('akey'), localStorage.getItem('skey'), 'serverless-data');
-var s3Html = new S3Html(localStorage.getItem('akey'), localStorage.getItem('skey'), 'serverless-cdn');
-
-updateRow = function(rows) {
+updateRow = rows => {
+  if (typeof rows.articles !== 'undefined') {
+    rows = rows.articles;
+  }
   $('#table').html('');
   for (var id in rows) {
     $('#table').append('<tr id="row' + id + '"><td>' + [
@@ -299,13 +379,14 @@ updateRow = function(rows) {
       rows[id].date,
       rows[id].url,
       rows[id].published,
-      '<button type="button" onclick="_edit(\'' + id + '\');">Edit</button>',
-      (rows[id].published == 1) ? '<button type="button" onclick="_changeUrl(\'' + id + '\');">Change URL</button>' : '',
+      '<button type="button" onclick="_edit(' + id + ');">Edit</button>',
+      '<button type="button" onclick="_delete(' + id + ');">Delete</button>',
+      '<button type="button" onclick="_changePublishStatus(' + id + ',' + (rows[id].published^1) +');">' + ((rows[id].published == 1)?'Unpublish':'Publish') + '</button>',
     ].join('</td><td>') + '</td></tr>');
   }
 };
 
-clearDetail = function() {
+clearDetail = () => {
   $('#detailId').html('');
   $('#detailTitle').val('');
   $('#detailUrl').val('');
@@ -313,34 +394,31 @@ clearDetail = function() {
   $('#detailContent').val('');
 };
 
-_edit = function(id) {
-  s3Data.getDetail(id, function(res) {
-    $('#detailId').html(id);
-    $('#detailTitle').val(res.title);
-    $('#detailUrl').val(res.url);
-    $('#detailUrl').prop('disabled', (res.published == 1));
-    $('#detailDate').html(res.date);
-    $('#detailPublished').html(res.published);
-    $('#detailContent').val(res.content);
-  });
+_edit = async id => {
+  var article = await ctrl.getArticle(id);
+  $('#detailId').html(id);
+  $('#detailTitle').val(article.title);
+  $('#detailUrl').val(article.url);
+  $('#detailDate').html(article.date);
+  $('#detailPublished').html(article.published);
+  $('#detailContent').val(article.content);
 };
 
-_changeUrl = function(id) {
-  s3Data.getDetail(id, function(article) {
-    $('#changeUrlId').html(id);
-    $('#currentUrl').html(article.url);
-    $('#newUrl').val('');
-  });
+_delete = async id => {
+  ctrl.deleteArticle(id).then(updateRow);
 };
 
-$('#login').on('click', function(){
+_changePublishStatus = async (id, status) => {
+  ctrl.postArticle(id, {published: status}).then(updateRow);
+};
+
+$('#login').on('click', () => {
   localStorage.setItem('akey', $('#access_key').val());
   localStorage.setItem('skey', $('#secret_key').val());
-  s3Data.configure(localStorage.getItem('akey'), localStorage.getItem('skey'));
-  s3Html.configure(localStorage.getItem('akey'), localStorage.getItem('skey'));
+  ctrl.configure(localStorage.getItem('akey'), localStorage.getItem('skey'));
 });
 
-$('#add').on('click', function() {
+$('#add').on('click', () => {
   var now = new Date();
   var yyyymmdd = now.getFullYear() + '-' +
     ( "0"+( now.getMonth()+1 ) ).slice(-2) + '-' +
@@ -348,69 +426,19 @@ $('#add').on('click', function() {
   $('#detailId').html('');
   $('#detailTitle').val('(TITLE)');
   $('#detailUrl').val('(URL)');
-  $('#detailUrl').prop('disabled', false);
   $('#detailDate').html(yyyymmdd);
   $('#detailPublished').html(0);
   $('#detailContent').val('');
 });
 
-$('#list').on('click', function(){
+$('#list').on('click', () => {
   $(this).hide();
   $('#add').show();
   $('#tableAll').show();
-  s3Data.getArticles(updateRow);
+  ctrl.getArticles().then(updateRow);
 });
 
-$('#delete').on('click', function(){
-  var id = $('#detailId').html();
-  s3Data.getDetail(id, (article) => {
-    if (article.published == 1) {
-      s3Html.deleteHtml('article', article.url);
-    }
-    s3Data.deleteDetail(id, updateRow);
-  })
-  clearDetail();
-});
-
-$('#changeUrl').on('click', function(){
-  var id = $('#changeUrlId').html();
-  var currentUrl = $('#currentUrl').html();
-  var newUrl = $('#newUrl').val();
-  s3Html.moveHtml('article', currentUrl, newUrl);
-  s3Data.postDetail(id, {url: newUrl}, updateRow);
-});
-
-$('#publish').on('click', function(){
-  var id = $('#detailId').html();
-  s3Data.getDetail(id, (article) => {
-    s3Html.postHtml('article', article.url, {
-      title: article.title,
-      content: article.content,
-      date: article.date
-    });
-    s3Data.postDetail(id, {published: 1}, (articles) => {
-      updateRow(articles);
-      var filteredArticles = Object.values(articles).filter((item, idx) => {
-        if (item.published == 1) return true;
-      }).sort((a, b) => {
-        if(a.date > b.date) return -1;
-        if(a.date < b.date) return 1;
-        return 0;
-      });
-      s3Html.postHtml('articles', '0000', filteredArticles);
-    });
-  });
-});
-
-$('#unpublish').on('click', function(){
-  var id = $('#detailId').html();
-  s3Data.getDetail(id, (article) => {
-    s3Html.deleteHtml('article', article.url);
-    s3Data.postDetail(id, {published: 0}, updateRow);
-  });
-});
-
-$('#update').on('click', function(){
+$('#update').on('click', async () => {
   var id = $('#detailId').html();
   var title = $('#detailTitle').val();
   var url = $('#detailUrl').val();
@@ -418,19 +446,26 @@ $('#update').on('click', function(){
   var published = $('#detailPublished').html();
   var content = $('#detailContent').val();
   if (id === '') id = null;
-  s3Data.postDetail(id, {
+  ctrl.postArticle(id, {
     title: title,
     url: url,
     date: date,
     published: published,
     content: content
-  }, updateRow);
-  if (published == 1) {
-    s3Html.postHtml('article', url, {
-      titile: title,
-      date: date,
-      content: content
-    });
+  }).then(updateRow);
+  clearDetail();
+});
+
+$('#image').on('change', () => {
+  if (this.files.length === 1) {
+    $('#imageUpload').attr('disabled', false);
+    var fileName = this.files[0].name.split('.');
+    $('#imageSuffix').html('.' + fileName.pop());
+    $('#imageName').val(fileName.join('.'));
+  } else {
+    $('#imageUpload').attr('disabled', true);
+    $('#imageName').val('');
+    $('#imageSuffix').html('');
   }
 });
 
@@ -443,24 +478,23 @@ $('#imageUpload').on('click', () => {
   if (imageName !== '') {
     fileName = imageName + '.' + fileName.split('.').pop();
   }
-  s3Data.postImage(id, fileName, file);
+  ctrl.postDataImage(id, fileName, file);
 });
 
-$('#imageList').on('click', () => {
+$('#imageList').on('click', async () => {
   var id = $('#detailId').html();
   if (id === '') return;
-  s3Data.getImages(id, (images) => {
-    for (var image of images) {
-      $('#images')
-        .append(image.fileName)
-        .append($('<br>'))
-        .append($('<img>').attr('src', image.url).css({
-          'max-width': 200,
-          'max-height': 200
-        }))
-        .append($('<br>'));
-    }
-  });
+  var images = await ctrl.getDataImages(id);
+  for (var image of images) {
+    $('#images')
+      .append(image.fileName)
+      .append($('<br>'))
+      .append($('<img>').attr('src', image.url).css({
+        'max-width': 200,
+        'max-height': 200
+      }))
+      .append($('<br>'));
+  }
 });
 
 </script>
