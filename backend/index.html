@@ -1,10 +1,10 @@
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
 <script src="https://sdk.amazonaws.com/js/aws-sdk-2.16.0.min.js"></script>
 
-Access Key : <input type="text" id="access_key" size="40" />
-<br />
-Secret Key : <input type="password" id="secret_key" size="40" />
-<br />
+Access Key : <input type="text" id="accessKey" size="40" /><br />
+Secret Key : <input type="password" id="secretKey" size="40" /><br />
+Data Bucket : <input type="text" id="dataBucket" size="40" /><br />
+HTML Bucket : <input type="text" id="htmlBucket" size="40" /><br />
 <button type="button" id="login">Save</button>
 <br /><br />
 <button type="button" id="list">Load</button>
@@ -52,13 +52,17 @@ Image Name: <input type="text" id="imageName" size="40" /> <span id="imageSuffix
 class S3Base {
 
   constructor(accessKey, secretKey, bucketName) {
-    this.configure(accessKey, secretKey);
+    this.configure(accessKey, secretKey, bucketName);
+  }
+
+  configure(accessKey, secretKey, bucketName) {
+    AWS.config.update({accessKeyId: accessKey, secretAccessKey: secretKey});
+    this.s3 = new AWS.S3({region: 'ap-northeast-1', maxRetries: 1});
     this.bucket = bucketName;
   }
 
-  configure(accessKey, secretKey) {
-    AWS.config.update({accessKeyId: accessKey, secretAccessKey: secretKey});
-    this.s3 = new AWS.S3({region: 'ap-northeast-1', maxRetries: 1});
+  getPublicUrl(path) {
+    return this.s3.endpoint.protocol + '//' + this.bucket + '.' + this.s3.endpoint.host + '/' + path;
   }
 
   get(path, defaultValue) {
@@ -275,6 +279,10 @@ class S3Html extends S3Base {
     }));
   }
 
+  getImageUrlPath(id) {
+    return this.getPublicUrl(this._getPath('image', id + '/'));
+  }
+
   async postImage(id, fileName, content) {
     return await this.post(this._getPath('image', id + '/' + fileName), content.Body, content.ContentType);
   }
@@ -285,14 +293,15 @@ class S3Html extends S3Base {
 }
 
 class Controller {
-  constructor(accessKey, secretKey, dataBucket, htmlBucket) {
-    this.s3Data = new S3Data(accessKey, secretKey, dataBucket);
-    this.s3Html = new S3Html(accessKey, secretKey, htmlBucket);
+  constructor(config) {
+    this.s3Data = new S3Data();
+    this.s3Html = new S3Html();
+    this.configure(config);
   }
 
-  configure(accessKey, secretKey) {
-    this.s3Data.configure(accessKey, secretKey);
-    this.s3Html.configure(accessKey, secretKey);
+  configure(config) {
+    this.s3Data.configure(config.accessKey, config.secretKey, config.dataBucket);
+    this.s3Html.configure(config.accessKey, config.secretKey, config.htmlBucket);
   }
 
   async getDataImages(id) {
@@ -301,17 +310,6 @@ class Controller {
 
   async postDataImage(id, fileName, file) {
     return await this.s3Data.postImage(id, fileName, file);
-  }
-
-  async updateHtmlImagesFromDataImages(id) {
-    // Delete current images on HTML
-    await this.s3Html.deleteImages(id);
-
-    // Copy images from DATA to HTML
-    for (var image of await this.s3Data.getImages(id)) {
-      var data = await this.s3Data.get(image.Key);
-      this.s3Html.postImage(1, data.key.split('/').pop(), data.data);
-    }
   }
 
   async getArticles() {
@@ -333,11 +331,7 @@ class Controller {
   async postArticle(id, data) {
     var res = await this.s3Data.postArticle(id, data);
     if (res.article.published == 1) {
-      this.s3Html.postHtml('article', res.article.url, {
-        title: res.article.title,
-        content: res.article.content,
-        date: res.article.date
-      });
+      this._publishArticle(id, res.article);
       if (res.prev !== null && res.prev.url !== res.article.url) {
         this.s3Html.deleteHtml('article', res.prev.url);
       }
@@ -346,6 +340,24 @@ class Controller {
     }
     this._updateArticlesList(res.articles);
     return res;
+  }
+
+  async _publishArticle(id, article) {
+    var content = article.content.replace(/{{img:(.*)}}/g, '<img src="' + this.s3Html.getImageUrlPath(id) + '$1">');
+    this.s3Html.postHtml('article', article.url, {
+      title: article.title,
+      content: content,
+      date: article.date
+    });
+
+    // Delete current images on HTML
+    await this.s3Html.deleteImages(id);
+
+    // Copy images from DATA to HTML
+    for (var image of await this.s3Data.getImages(id)) {
+      var data = await this.s3Data.get(image.Key);
+      this.s3Html.postImage(1, data.key.split('/').pop(), data.data);
+    }
   }
 
   _updateArticlesList(articles) {
@@ -360,12 +372,43 @@ class Controller {
   }
 }
 
+class Config {
+
+  constructor(initialValues) {
+    this.keys = [
+      'accessKey',
+      'secretKey',
+      'dataBucket',
+      'htmlBucket'
+    ];
+  }
+
+  getKeys() {
+    return this.keys;
+  }
+
+  set(key, value) {
+    localStorage.setItem(key, value);
+  }
+
+  get(key) {
+    if (typeof key !== 'undefined') return localStorage.getItem(key);
+    var res = {};
+    for (var name of this.keys) {
+      res[name] = localStorage.getItem(name);
+    }
+    return res;
+  }
+}
+
 /////
 
-var ctrl = new Controller(localStorage.getItem('akey'), localStorage.getItem('skey'), 'serverless-data', 'serverless-cdn');
+var config = new Config();
+var ctrl = new Controller(config.get());
 
-$('#access_key').val(localStorage.getItem('akey'));
-$('#secret_key').val(localStorage.getItem('skey'));
+for (var key of config.getKeys()) {
+  $('#' + key).val(config.get(key));
+}
 
 updateRow = rows => {
   if (typeof rows.articles !== 'undefined') {
@@ -413,9 +456,10 @@ _changePublishStatus = async (id, status) => {
 };
 
 $('#login').on('click', () => {
-  localStorage.setItem('akey', $('#access_key').val());
-  localStorage.setItem('skey', $('#secret_key').val());
-  ctrl.configure(localStorage.getItem('akey'), localStorage.getItem('skey'));
+  for (var key of config.getKeys()) {
+    config.set(key, $('#' + key).val());
+  }
+  ctrl.configure(config.get());
 });
 
 $('#add').on('click', () => {
