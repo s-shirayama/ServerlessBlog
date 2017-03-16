@@ -1,5 +1,6 @@
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
 <script src="https://sdk.amazonaws.com/js/aws-sdk-2.16.0.min.js"></script>
+<script src='js/tinymce/tinymce.min.js'></script>
 
 Access Key : <input type="text" id="accessKey" size="40" /><br />
 Secret Key : <input type="password" id="secretKey" size="40" /><br />
@@ -217,7 +218,7 @@ class S3Data extends S3Base {
   async getImages(id) {
     var images = await this.list(this.assets + id + '/');
     for (var key in images) {
-      images[key].url = this.s3.getSignedUrl('getObject', {Bucket: this.bucket, Key: images[key].Key});
+      images[key].url = this.s3.getSignedUrl('getObject', {Bucket: this.bucket, Key: images[key].Key, Expires: 60*60*24});
       images[key].fileName = images[key].Key.split('/' + id + '/').pop();
     }
     return images;
@@ -225,6 +226,14 @@ class S3Data extends S3Base {
 
   async postImage(id, fileName, file) {
     return await this.post(this.assets + id + '/' + fileName, file, file.type);
+  }
+
+  async deleteImage(id, fileName) {
+    return await this.delete(this.assets + id + '/' + fileName);
+  }
+
+  getImageUrlPath(id) {
+    return this.getPublicUrl(this.assets + id + '/');
   }
 }
 
@@ -293,6 +302,7 @@ class S3Html extends S3Base {
 }
 
 class Controller {
+
   constructor(config) {
     this.s3Data = new S3Data();
     this.s3Html = new S3Html();
@@ -312,12 +322,28 @@ class Controller {
     return await this.s3Data.postImage(id, fileName, file);
   }
 
+  async deleteDataImage(id, fileName) {
+    return await this.s3Data.deleteImage(id, fileName);
+  }
+
   async getArticles() {
     return await this.s3Data.getArticles();
   }
 
-  async getArticle(id) {
-    return await this.s3Data.getArticle(id);
+  async getArticle(id, updateImageUrl) {
+    if (typeof updateImageUrl === 'undefined') {
+      updateImageUrl = false;
+    }
+    var res = await this.s3Data.getArticle(id);
+    if (updateImageUrl === true && typeof res.content !== 'undefined') {
+      for (var image of await this.getDataImages(id)) {
+        res.content = res.content.replace(
+          new RegExp('"' + this.s3Data.getImageUrlPath(1) + '([^\?]+)\?[^"]+"', 'g'),
+          '"' + image.url + '"'
+        );
+      }
+    }
+    return res;
   }
 
   async deleteArticle(id) {
@@ -343,7 +369,10 @@ class Controller {
   }
 
   async _publishArticle(id, article) {
-    var content = article.content.replace(/{{img:(.*)}}/g, '<img src="' + this.s3Html.getImageUrlPath(id) + '$1">');
+    var content = article.content.replace(
+      new RegExp('"' + this.s3Data.getImageUrlPath(1) + '([^\?]+)\?[^"]+"', 'g'),
+      '"' + this.s3Html.getImageUrlPath(1) + '$1?_=' + (new Date()).getTime() + '"'
+    );
     this.s3Html.postHtml('article', article.url, {
       title: article.title,
       content: content,
@@ -429,26 +458,49 @@ updateRow = rows => {
   }
 };
 
+updateImage = (id, images) => {
+  $('#images').html('');
+  for (var image of images) {
+    $('#images')
+      .append(image.fileName)
+      .append('<button type="button" onclick="_deleteImage(' + id + ', \'' + image.fileName + '\');">Delete</button>')
+      .append($('<br>'))
+      .append($('<img>').attr('src', image.url).css({
+        'max-width': 200,
+        'max-height': 200
+      }))
+      .append($('<br>'));
+  }
+};
+
 clearDetail = () => {
   $('#detailId').html('');
   $('#detailTitle').val('');
   $('#detailUrl').val('');
   $('#detailDate').html('');
-  $('#detailContent').val('');
+  tinyMCE.get('detailContent').setContent('');
+  tinyMCE.get('detailContent').undoManager.clear();
 };
 
 _edit = async id => {
-  var article = await ctrl.getArticle(id);
+  var article = await ctrl.getArticle(id, true);
   $('#detailId').html(id);
   $('#detailTitle').val(article.title);
   $('#detailUrl').val(article.url);
   $('#detailDate').html(article.date);
   $('#detailPublished').html(article.published);
-  $('#detailContent').val(article.content);
+  tinyMCE.get('detailContent').setContent(article.content);
+  tinyMCE.get('detailContent').undoManager.clear();
 };
 
 _delete = async id => {
   ctrl.deleteArticle(id).then(updateRow);
+};
+
+_deleteImage = async (id, fileName) => {
+  ctrl.deleteDataImage(id, fileName).then(async () => {
+    updateImage(id, await ctrl.getDataImages(id));
+  });
 };
 
 _changePublishStatus = async (id, status) => {
@@ -472,7 +524,8 @@ $('#add').on('click', () => {
   $('#detailUrl').val('(URL)');
   $('#detailDate').html(yyyymmdd);
   $('#detailPublished').html(0);
-  $('#detailContent').val('');
+  tinyMCE.get('detailContent').setContent('');
+  tinyMCE.get('detailContent').undoManager.clear();
 });
 
 $('#list').on('click', () => {
@@ -488,7 +541,8 @@ $('#update').on('click', async () => {
   var url = $('#detailUrl').val();
   var date = $('#detailDate').html();
   var published = $('#detailPublished').html();
-  var content = $('#detailContent').val();
+  var content = tinyMCE.get('detailContent').getContent({format : 'raw'});
+  tinyMCE.get('detailContent').undoManager.clear();
   if (id === '') id = null;
   ctrl.postArticle(id, {
     title: title,
@@ -500,7 +554,8 @@ $('#update').on('click', async () => {
   clearDetail();
 });
 
-$('#image').on('change', () => {
+// Cannot use () => {} because it's using 'this'
+$('#image').on('change', function() {
   if (this.files.length === 1) {
     $('#imageUpload').attr('disabled', false);
     var fileName = this.files[0].name.split('.');
@@ -513,7 +568,7 @@ $('#image').on('change', () => {
   }
 });
 
-$('#imageUpload').on('click', () => {
+$('#imageUpload').on('click', async () => {
   var id = $('#detailId').html();
   if ($('#image')[0].files.length === 0 || id === '') return;
   var file = $('#image')[0].files[0];
@@ -522,23 +577,30 @@ $('#imageUpload').on('click', () => {
   if (imageName !== '') {
     fileName = imageName + '.' + fileName.split('.').pop();
   }
-  ctrl.postDataImage(id, fileName, file);
+  ctrl.postDataImage(id, fileName, file).then(async () => {
+    updateImage(id, await ctrl.getDataImages(id));
+  });
 });
 
 $('#imageList').on('click', async () => {
   var id = $('#detailId').html();
   if (id === '') return;
-  var images = await ctrl.getDataImages(id);
-  for (var image of images) {
-    $('#images')
-      .append(image.fileName)
-      .append($('<br>'))
-      .append($('<img>').attr('src', image.url).css({
-        'max-width': 200,
-        'max-height': 200
-      }))
-      .append($('<br>'));
-  }
+  updateImage(id, await ctrl.getDataImages(id));
 });
 
+tinymce.init({
+  selector: '#detailContent',
+  plugins: "image codesample",
+  menubar: "insert format",
+  toolbar: "undo redo | formatselect | bold italic underline strikethrough | alignleft aligncenter alignright alignjustify | bullist numlist outdent indent | image | codesample",
+  image_list: async success => {
+    var id = $('#detailId').html();
+    if (id === '') success([]);
+    var arr = [];
+    for (var image of await ctrl.getDataImages(id)) {
+      arr.push({title: image.fileName, value: image.url});
+    }
+    success(arr);
+  }
+});
 </script>
