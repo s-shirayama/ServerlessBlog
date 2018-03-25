@@ -33,6 +33,7 @@
 			<div class="wrap">
 				<div id="primary" class="content-area">
 					<main id="main" class="site-main" role="main">
+					  <template id="_template">
 						<article id="post-1" class="post-1 post type-post status-publish format-standard hentry category-uncategorized">
 							<header class="entry-header">
 								<div class="entry-meta">
@@ -46,6 +47,7 @@
 								<p id="_content"></p>
 							</div><!-- .entry-content -->
 						</article><!-- #post-## -->
+						</template>
 					</main><!-- #main -->
 				</div><!-- #primary -->
 				<aside id="secondary" class="widget-area" role="complementary">
@@ -65,62 +67,121 @@
 </div><!-- #page -->
 
 <script>
-	(function() {
+class JsonData {
 
-		var getUrl = function() {
-			var url = window.location.href.split('#!')[1];
-			if (typeof url === 'undefined') {
-				url = window.location.href.split('?_escaped_fragment_=')[1];
-			}
-			if (typeof url === 'undefined') return null;
-			return url.replace(/\//g, '');
-		}
+  constructor() {
+  	this.jsonUrl = 'https://serverless-cdn.s3-ap-northeast-1.amazonaws.com/';
+  	this.cache = {
+  		blogInfo: null,
+  		recentPosts: null
+  	};
+  }
 
-		var jsonUrl = 'https://s3-ap-northeast-1.amazonaws.com/serverless-cdn/';
-		var load = function(path, callback) {
+  async getArticle(url) {
+		var json = await this._load('_assets/article/' + url + '.json');
+		json.url = url;
+		return json;
+  }
+
+  async getBlogInfo() {
+  	if (this.cache.blogInfo === null) {
+	  	this.cache.blogInfo = await this._load('_assets/meta/blog.json');
+	  }
+  	return this.cache.blogInfo;
+  }
+
+  async getRecentPosts() {
+  	if (this.cache.recentPosts === null) {
+	  	this.cache.recentPosts = await this._load('_assets/meta/articles_0000.json');
+	  }
+  	return this.cache.recentPosts;
+  }
+
+ _load(path) {
+		return new Promise((resolve, reject) => {
 			$.ajax({
 				type: 'GET',
-				url: jsonUrl + path,
+				url: this.jsonUrl + path,
 				dataType: 'json',
-				success: callback
-			});
-		}
-
-		// Load blog info
-		load('_assets/meta/blog.json', (json) => {
-			$('#_blogTitle').html(json.title);
-			$('#_blogSubTitle').html(json.subTitle);
-			$('#_footer').html(json.footer);
-			document.title = document.title.replace(/{blogTitle}/, json.title);
+			}).then(resolve).fail(reject);
 		});
+	}
+}
 
-		var url = getUrl();
-		if (url !== null) {
-			// Load article detail
-			load('_assets/article/' + getUrl() + '.json', (json) => {
-				$('#_title').html(json.title);
-				$('#_content').html(json.content);
-				var now = new Date(json.date);
-				var month = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-				$('#_date').html(month[now.getMonth()] + ' ' + now.getDate() + ', ' + now.getFullYear()).attr('datetime', json.date + 'T00:00:00+09:00');
-				document.title = document.title.replace(/{articleTitle}/, json.title);
-			});
-		} else {
-			// Load Articles
-  		load('_assets/meta/articles_0000.json', (json) => {
-  			console.log(json);
-  		});
-  	}
+class Controller {
+  
+  constructor() {
+  	this.dataSource = new JsonData();
+  	this.months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+		var url = window.location.href.split('#!')[1];
+		if (typeof url === 'undefined') {
+			url = window.location.href.split('?_escaped_fragment_=')[1];
+		}
+		this.url = (typeof url !== 'undefined')? url.replace(/\//g, '') : null;
+  }
 
-		// Load Articles
- 		load('_assets/meta/articles_0000.json', (json) => {
- 			var recentPosts = $('#_recentPosts');
- 			for (var article of json) {
-   			console.log(article);
-   			recentPosts.append($('<li>').append($('<a>').attr('href', 'index.html#!/' + article.url + '/').html(article.title).on('click', function(){location.reload();})));
- 			}
- 		});
+  async loadBlogInfo() {
+  	var json = await this.dataSource.getBlogInfo();
+  	$('#_blogTitle').html(json.title);
+		$('#_blogSubTitle').html(json.subTitle);
+		$('#_footer').html(json.footer);
+		document.title = document.title.replace(/{blogTitle}/, json.title);
+  }
 
-	})();
+	async loadRecentPosts() {
+		var json = await this.dataSource.getRecentPosts();
+ 		var recentPosts = $('#_recentPosts');
+		for (var article of json) {
+ 			recentPosts.append($('<li>').append(this._getLinkTitleTag(article.url, article.title)));
+		}
+	}
+
+  async loadSinglePage() {
+		var json = await this.dataSource.getArticle(this.url);
+		this._addArticle(json);
+		document.title = document.title.replace(/{articleTitle}/, json.title);
+  }
+
+  async loadTopPage() {
+  	var blogInfo = await this.dataSource.getBlogInfo();
+  	document.title = blogInfo.title;
+  	var json = await this.dataSource.getRecentPosts();
+  	for (var article of json) {
+			this._addArticle(await this.dataSource.getArticle(article.url));
+		}
+  }
+
+  isSinglePage() {
+  	return (this.url !== null);
+  }
+
+  _getLinkTitleTag(url, title) {
+  	return $('<a>').attr({href: 'index.html#!/' + url + '/'}).html(title).on('click', () => { location.reload(); });
+  }
+
+  _addArticle(json) {
+    var template = document.importNode($('#_template')[0].content, true);
+		$(template).find('#_title').html(this._getLinkTitleTag(json.url, json.title).attr({rel: 'bookmark'}));
+  	$(template).find('#_content').html(json.content);
+  	$(template).find('#_date').html(this._getDate(json.date))
+  		.attr({datetime: json.date + 'T00:00:00+09:00'});
+		$('#main').append(template);
+	}
+
+	_getDate(date) {
+		var now = new Date(date);
+		return this.months[now.getMonth()] + ' ' + now.getDate() + ', ' + now.getFullYear();
+	}
+}
+
+var ctrl = new Controller();
+ctrl.loadBlogInfo();
+ctrl.loadRecentPosts();
+if (ctrl.isSinglePage()) {
+	ctrl.loadSinglePage();
+} else {
+	ctrl.loadTopPage();
+}
+
 </script>
 </body></html>

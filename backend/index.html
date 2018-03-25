@@ -9,7 +9,11 @@ HTML Bucket : <input type="text" id="htmlBucket" size="40" /><br />
 <button type="button" id="login">Save</button>
 <br /><br />
 <button type="button" id="list">Load</button>
+<button type="button" id="loadSettings">Load Settings</button>
 <br />
+
+<h2>Settings:</h2>
+<div id="settings"></div>
 
 <h2>Table:</h2>
 <br />
@@ -150,6 +154,16 @@ class S3Data extends S3Base {
     this.article = 'articles.json';
     this.detail = 'detail/';
     this.assets = 'assets/';
+    this.settings = 'settings.json';
+  }
+
+  async getSettings() {
+    var res = await this.get(this.settings, JSON.stringify({}));
+    return JSON.parse(res.content);
+  }
+
+  async postSettings(setting) {
+    return await this.post(this.settings, JSON.stringify(setting));
   }
 
   async getArticles() {
@@ -166,7 +180,8 @@ class S3Data extends S3Base {
       return {};
     }
     var res = await this.get(this.detail + id + '.json', JSON.stringify({}));
-    return JSON.parse(res.content);
+    var articles = await this.getArticles();
+    return Object.assign(JSON.parse(res.content), articles[id]);
   }
 
   async deleteArticle(id) {
@@ -179,10 +194,6 @@ class S3Data extends S3Base {
 
   async _postArticle(id, article) {
     this.post(this.detail + id + '.json', JSON.stringify({
-      title: article.title,
-      url: article.url,
-      date: article.date,
-      published: article.published,
       content: article.content
     }));
   }
@@ -249,10 +260,9 @@ class S3Html extends S3Base {
       },
       articles: {
         prefix: '_assets/meta/articles_',
-        suffix: '.json',
+        suffix: '.json', 
         json: true
       },
-      // s3Html.postHtml('blog', '', {title: 'Serverlessブログ', footer: 'serverlessなブログ', subTitle: 'Blog Site with Serverless Architecture'})
       blog: {
         prefix: '_assets/meta/blog',
         suffix: '.json',
@@ -330,6 +340,20 @@ class Controller {
     return await this.s3Data.getArticles();
   }
 
+  async getSettings() {
+    return await this.s3Data.getSettings();
+  }
+
+  postSettings(settings) {
+    this.s3Data.postSettings(settings);
+    // title, footer, subTitle => blog.json
+    var blogSettings = {};
+    for (var key of ['title', 'footer', 'subTitle']) {
+      blogSettings[key] = (typeof settings[key] !== 'undefined') ? settings[key] : '';
+    }
+    this.s3Html.postHtml('blog', '', blogSettings);
+  }
+
   async getArticle(id, updateImageUrl) {
     if (typeof updateImageUrl === 'undefined') {
       updateImageUrl = false;
@@ -370,8 +394,8 @@ class Controller {
 
   async _publishArticle(id, article) {
     var content = article.content.replace(
-      new RegExp('"' + this.s3Data.getImageUrlPath(1) + '([^\?]+)\?[^"]+"', 'g'),
-      '"' + this.s3Html.getImageUrlPath(1) + '$1?_=' + (new Date()).getTime() + '"'
+      new RegExp('"' + this.s3Data.getImageUrlPath(id) + '([^\?]+)\?[^"]+"', 'g'),
+      '"' + this.s3Html.getImageUrlPath(id) + '$1?_=' + (new Date()).getTime() + '"'
     );
     this.s3Html.postHtml('article', article.url, {
       title: article.title,
@@ -385,7 +409,7 @@ class Controller {
     // Copy images from DATA to HTML
     for (var image of await this.s3Data.getImages(id)) {
       var data = await this.s3Data.get(image.Key);
-      this.s3Html.postImage(1, data.key.split('/').pop(), data.data);
+      this.s3Html.postImage(id, data.key.split('/').pop(), data.data);
     }
   }
 
@@ -438,6 +462,15 @@ var ctrl = new Controller(config.get());
 for (var key of config.getKeys()) {
   $('#' + key).val(config.get(key));
 }
+
+updateSettings = settings => {
+  $('#settings').html('');
+  for (var key in settings) {
+    $('#settings').append(key + ' : ')
+      .append('<input id="settings_' + key + '" type=text value="' + settings[key] + '" size="40">').append($('<br>'));
+  }
+  $('#settings').append('<button type="button" onclick="_updateSettings();">Update Settings</button>');
+};
 
 updateRow = rows => {
   if (typeof rows.articles !== 'undefined') {
@@ -507,6 +540,15 @@ _changePublishStatus = async (id, status) => {
   ctrl.postArticle(id, {published: status}).then(updateRow);
 };
 
+_updateSettings = () => {
+  var new_settings = {};
+  for (var input of $('#settings').find('input')) {
+    var key = input.id.replace(/^settings_/, '');
+    new_settings[key] = input.value;
+  }
+  ctrl.postSettings(new_settings);
+}
+
 $('#login').on('click', () => {
   for (var key of config.getKeys()) {
     config.set(key, $('#' + key).val());
@@ -515,14 +557,10 @@ $('#login').on('click', () => {
 });
 
 $('#add').on('click', () => {
-  var now = new Date();
-  var yyyymmdd = now.getFullYear() + '-' +
-    ( "0"+( now.getMonth()+1 ) ).slice(-2) + '-' +
-    ( "0"+now.getDate() ).slice(-2);
   $('#detailId').html('');
   $('#detailTitle').val('(TITLE)');
   $('#detailUrl').val('(URL)');
-  $('#detailDate').html(yyyymmdd);
+  $('#detailDate').html('');
   $('#detailPublished').html(0);
   tinyMCE.get('detailContent').setContent('');
   tinyMCE.get('detailContent').undoManager.clear();
@@ -537,20 +575,24 @@ $('#list').on('click', () => {
 
 $('#update').on('click', async () => {
   var id = $('#detailId').html();
-  var title = $('#detailTitle').val();
-  var url = $('#detailUrl').val();
-  var date = $('#detailDate').html();
-  var published = $('#detailPublished').html();
-  var content = tinyMCE.get('detailContent').getContent({format : 'raw'});
+  var article = {
+    title: $('#detailTitle').val(),
+    url: $('#detailUrl').val(),
+    published: $('#detailPublished').html(),
+    content: tinyMCE.get('detailContent').getContent({format : 'raw'})
+  };
   tinyMCE.get('detailContent').undoManager.clear();
-  if (id === '') id = null;
-  ctrl.postArticle(id, {
-    title: title,
-    url: url,
-    date: date,
-    published: published,
-    content: content
-  }).then(updateRow);
+  if (id === '') {
+    id = null;
+    var now = new Date();
+    article.date = now.getFullYear() + '-' +
+      ("0"+(now.getMonth()+1)).slice(-2) + '-' +
+      ("0"+now.getDate()).slice(-2) + ' ' +
+      ("0"+now.getHours()).slice(-2) + ':' +
+      ("0"+now.getMinutes()).slice(-2) + ':' +
+      ("0"+now.getSeconds()).slice(-2);
+  }
+  ctrl.postArticle(id, article).then(updateRow);
   clearDetail();
 });
 
@@ -588,11 +630,16 @@ $('#imageList').on('click', async () => {
   updateImage(id, await ctrl.getDataImages(id));
 });
 
+$('#loadSettings').on('click', async () => {
+  var settings = await ctrl.getSettings();
+  updateSettings(settings);
+});
+
 tinymce.init({
   selector: '#detailContent',
-  plugins: "image codesample",
+  plugins: "image codesample code",
   menubar: "insert format",
-  toolbar: "undo redo | formatselect | bold italic underline strikethrough | alignleft aligncenter alignright alignjustify | bullist numlist outdent indent | image | codesample",
+  toolbar: "undo redo | formatselect | bold italic underline strikethrough | alignleft aligncenter alignright alignjustify | bullist numlist outdent indent | image | codesample | code",
   image_list: async success => {
     var id = $('#detailId').html();
     if (id === '') success([]);
